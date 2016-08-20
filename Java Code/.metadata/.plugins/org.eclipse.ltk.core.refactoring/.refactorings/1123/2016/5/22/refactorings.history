@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename method &apos;HLSTM.ComputeError(...)&apos; to &apos;computeError&apos;&#x0A;- Original project: &apos;1123&apos;&#x0A;- Original element: &apos;HLSTM.ComputeError(...)&apos;&#x0A;- Renamed element: &apos;HLSTM.computeError(...)&apos;&#x0A;- Update references to refactored element" delegate="false" deprecate="false" description="Rename method &apos;ComputeError&apos;" flags="589826" id="org.eclipse.jdt.ui.rename.method" input="/src&lt;{HLSTM.java[HLSTM~ComputeError~QSample;~QNet;" name="computeError" references="true" stamp="1464099417160" version="1.0"/>
+</session>

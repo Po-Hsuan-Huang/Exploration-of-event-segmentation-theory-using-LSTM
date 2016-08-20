@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename method &apos;HLSTM.storeCellssState()&apos; to &apos;cellsStateListener&apos;&#x0A;- Original project: &apos;GateDetect1D&apos;&#x0A;- Original element: &apos;HLSTM.storeCellssState()&apos;&#x0A;- Renamed element: &apos;HLSTM.cellsStateListener()&apos;&#x0A;- Update references to refactored element" delegate="false" deprecate="false" description="Rename method &apos;storeCellssState&apos;" flags="589830" id="org.eclipse.jdt.ui.rename.method" input="/src&lt;{HLSTM.java[HLSTM~storeCellssState" name="cellsStateListener" references="true" stamp="1464966442517" version="1.0"/>
+</session>

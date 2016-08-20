@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">&#x0A;<refactoring comment="Delete resource &apos;DiskWorld&apos;" deleteContents="false" description="Delete resource &apos;DiskWorld&apos;" element1="/DiskWorld" flags="7" id="org.eclipse.ltk.core.refactoring.delete.resources" resources="1" stamp="1457014079215"/>&#x0A;<refactoring comment="Delete resource &apos;WorldDisk_InverseModel-is-another-LSTM/lib/jannlab-wip.jar&apos;" deleteContents="false" description="Delete resource &apos;WorldDisk_InverseModel-is-another-LSTM/lib/jannlab-wip.jar&apos;" element1="/WorldDisk_InverseModel-is-another-LSTM/lib/jannlab-wip.jar" flags="7" id="org.eclipse.ltk.core.refactoring.delete.resources" resources="1" stamp="1457015118961"/>
+</session>

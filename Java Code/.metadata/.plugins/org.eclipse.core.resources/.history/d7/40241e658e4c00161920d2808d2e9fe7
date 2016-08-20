@@ -1,0 +1,220 @@
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Timer;
+
+import de.jannlab.data.Sample;
+import de.jannlab.data.SampleSet;
+import de.jannlab.math.Matrix;
+
+
+/**
+ *  This Main Class runs the 1-D simulation of a point ball bouncing between [0, 1] with
+ *  constant velocity. The Brain that made of LSTM model tries to predict the location
+ *  of the ball in the next time step.
+ *  
+ * */
+
+public class Main2_2D {
+
+
+	/** parameters of the physical model */
+	/**
+	 * 
+	 * @param ball  The Object that submit to the physics
+	 * @param input The current location of the object
+	 * @return
+	 */
+	public static double[] physicsModel(Ball2D ball,double[] input) {
+		int dim = input.length;
+		// left boundary of world
+		final double WorldLeftBound = -1.0;
+		// right boundary of world
+		final double WorldRightBound = 1.0;
+
+		if (ball.isStart()) {
+			
+			for (int i =0; i<dim; i++){
+				if ((double)Math.round(input[i]*10)/10 <= WorldLeftBound  && ball.getVelocity(i) < 0) {
+					ball.bounce(i);
+				}
+				if ((double)Math.round(input[i]*10)/10 >= WorldRightBound  && ball.getVelocity(i) > 0) {
+					ball.bounce(i);
+				}
+			}
+			ball.fly();
+
+		}
+		return ball.getLoc();
+	}
+
+
+
+
+	/** Parameters for main method */
+	// Physics params
+		static int timespan = 2000;			
+	// training sequence length.
+		static int window = 1;
+	// model dimension
+		static int dim = 2;
+	//Write file
+	static ArrayList<String> INPUT = new ArrayList<String>();
+	static ArrayList<String> PRED = new ArrayList<String>();
+	static ArrayList<String> TARGET = new ArrayList<String>();
+	static ArrayList<String> ERR = new ArrayList<String>();
+	static ArrayList<String> ERRVAR = new ArrayList<String>();
+	static ArrayList<String> GATEHIST = new ArrayList<String>();
+	static ArrayList<Double> WEI = new ArrayList<Double>();
+
+	// ball
+	static Ball2D ball;
+
+	public static void main(String[] args) {
+
+
+		//Initiation of models
+		HLSTM.mu= 0.2;
+		HLSTM.alpha = 0.8;
+		HLSTM.window = window;
+		HLSTM.DEFAULT_ERRORLENGTH = 1;
+
+		HLSTM Brain = new HLSTM(dim,2,dim); // JannLab doesn't support online learning.
+		
+		
+				
+		// Brain.init();
+		
+		long tStart = System.nanoTime();
+		simulate(Brain);
+		long tEnd = System.nanoTime();
+		
+		long tlapse = tEnd - tStart; // time in nanoseconds		
+		System.out.println("tlapse = "  + tlapse + " nanosec");
+		
+		
+		// test phase
+
+		double[] netIn =ball.getLoc();
+		double[] netOut ;
+		HLSTM.isOnline = false;
+		 ArrayList<String> USP= new ArrayList<String>();
+		for(int t =0; t<100; t++){
+			
+			netOut=Brain.predict(netIn);
+		
+			for(int k=0; k< dim; k++){
+			    System.out.println("[" + (double)Math.round(netIn[k]*100)/100 
+			    		+ "] => [" + (double)Math.round(100*netOut[k])/100 + "]");
+			  
+			    netIn[k] += (double)Math.round(1000*netOut[k])/1000;
+			}
+			    
+		    USP.add(Arrays.toString(netOut));
+			WriteFiles.Write(USP, "usp");
+			
+		}
+	}
+
+
+	private static void simulate(HLSTM Brain) {
+		// TODO simulate 
+		/**
+		DAFAULT VALUES:
+				int timespan = 2000;
+				int T = 100;
+				double velocity = 0.05;
+				double location = 0;
+	 */
+
+	
+		// Initialization	
+	//	double[] velocity = { 1.0 , -1.0, -1.0};
+	//	double[] velocity = {0.2, -0.2, -0.2};
+	//	double[] location = {0, 1, 0};
+	 	double[] velocity = {0.002, -0.002};
+//		double[] velocity = {0.2 ,-0.2};
+// 		double[] velocity = {1,-1};
+		double[] location = {-1.0, 0.0};
+//		double[] velocity = {1};
+//		double[] location = {0};
+		
+		double[] currentlocation = location;
+		double[] nextlocation = new double[dim] ;
+		
+		for(int k=0 ; k< dim ; k++){
+			nextlocation[k]	= location[k] + velocity[k];
+		}
+		double[] data = currentlocation;
+		double[] target = velocity;
+		double[] predict ;
+		
+		
+		// initialize ball
+		ball  = new Ball2D(location,velocity);
+		ball.start();
+		
+		// Start Simulation
+		for (int t = 0; t < timespan; t++) {
+			if(t<window){
+				System.out.println("\n" + t);
+	
+				//physics
+				currentlocation = ball.getLoc().clone();
+				data = currentlocation;
+				nextlocation= physicsModel( ball, currentlocation);
+				target = ball.getVelocity().clone();
+//				target = nextlocation;
+				Brain.update(data,target);
+				
+				for(int k =0; k<dim; k++){
+					System.out.println("["+data[k]+"]->["+target[k]+"]");
+				}
+
+			}
+			// train phase
+			else if(t< timespan && t >= window){
+				System.out.println("\n" + t);
+
+				// Make Prediction
+				currentlocation = ball.getLoc().clone();
+				data = currentlocation;				
+				predict = Brain.predict(data);
+//				System.out.println("predction: " + predict[0]);
+				
+				nextlocation = physicsModel(ball,currentlocation);
+				target = ball.getVelocity().clone();
+//				target = nextlocation;
+
+				Brain.update(data,target);
+				
+				// UPDATE ERROR
+				Brain.updateError(predict,target);
+				double err = Brain.getMeanError();
+				double errvar = Brain.getErrorVariance();
+				// WRITE FILE
+				INPUT.add(Arrays.toString(data));
+				WriteFiles.Write(INPUT,"input");
+				PRED.add(Arrays.toString(predict));
+				WriteFiles.Write(PRED, "pred");
+				TARGET.add(Arrays.toString(target));
+				WriteFiles.Write(TARGET, "target");
+				ERR.add(Double.toString(err));
+				ERRVAR.add(Double.toString(errvar));
+				WriteFiles.Write(ERR, "err");
+				WriteFiles.Write(ERRVAR, "errvar");
+
+				for( int k = 0; k< dim; k++){
+				 System.out.println(" d: " + (double)Math.round(currentlocation[k]*10000)/10000 + " p: " +
+						 predict[k] + " t: "+ (double)Math.round(target[k]*10000)/10000+ " e: " + err);
+				}
+			}	
+		}
+		ball.stop();
+
+	}
+	
+}
+
+
+
+

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename local variable &apos;InversepredictSecction&apos; in &apos;Main.main(...)&apos; to &apos;InversepredictSection&apos;&#x0A;- Original project: &apos;1123&apos;&#x0A;- Original element: &apos;Main.main(String[]).InversepredictSecction&apos;&#x0A;- Renamed element: &apos;InversepredictSecction&apos;&#x0A;- Update references to refactored element" description="Rename local variable &apos;InversepredictSecction&apos;" id="org.eclipse.jdt.ui.rename.local.variable" input="/src&lt;{Main.java[Main~main~\[QString;@InversepredictSecction!931!963!935!956!I!0!false" name="InversepredictSection" references="true" stamp="1462977561482" version="1.0"/>
+</session>

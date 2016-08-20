@@ -1,0 +1,717 @@
+package EventSegmentationArchitecture;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.util.LinkedList;
+
+import EventSegmentationScenario.Fileprinter;
+
+public class ModelFitter {
+
+	/** Rand seed used */
+	private long rs;
+
+	int time = 0;
+	/** Dimension/Size of the motor command */
+	private int dimIn;
+	/** Dimension/size of the sensory information */
+	private int dimOut;
+
+	/** Matrix of all existing forward models */
+	private ModelList[] models;
+	/** All forward models currently active */
+	private int[] currentModels;
+	/** Number of forward models allowed per sensory dimension */
+	private int[] maxNrOfModels;
+
+	/** Event Boundary Models (= forward model transition probabilities) */
+	private EventBoundaryModels[] transitions;
+
+	/**
+	 * Which event boundaries are considered rewarding, (e.g. {1, 0} states that
+	 * a transition from forward model 1 to forward model 0 is rewarded)
+	 */
+	private int[][] rewardingTransitions = { { 1, 0 }, { 2, 0 }, { 3, 0 } };
+
+	/**
+	 * The latest sensory prediction of the forward models. Updated every time
+	 * predict() is called
+	 */
+	private double[] currentPrediction;
+	/** The sensory information of the preceding time step */
+	private double[] latestSensation;
+
+	/**
+	 * Boolean stating whether changes during the searching period on the
+	 * winning models are undone or kept. In the paper we have discarded changes
+	 * during searching. If changes on the winning model are not discarded, the
+	 * learning is faster, not as many surprises are detected, but false
+	 * winning models are degenerated.
+	 */
+	private boolean undoModelChangesDuringSearching = false;
+
+	/*
+	 * Fields for the model searching period
+	 * 
+	 * Arrays are used since searching is performed independently for every
+	 * sensory dimension. (temporaryModels[i] for example describes the forward
+	 * models active during searching for sensory dimension i
+	 */
+	/** sensory information that started searching */
+	private double[][] surprisingSensations;
+	/** back up of active forward models before the searching period was started */
+	private ForwardModel[] modelBackup;
+	/** all models temporarily active during the searching period */
+	private ModelList[] temporaryModels;
+	/** time steps already searched per dimension */
+	private int[] searchingTime;
+	/** maximal time allowed to search */
+	private static int maxSearchingTime = 10;
+
+	/** Parameters for the Recursive Least Square forward models */
+	private double initialGain = 1000;
+	private double lambda = 0.99;
+
+	/** ForwardModelList params */
+	Object[] arguments = new Object[6];
+	/** instantaneous error */
+	private double sumOfErrors;
+
+	/**
+	 * Constructor
+	 * 
+	 * @param dimIn
+	 *            , size of the motor command vector
+	 * @param firstSensation
+	 *            , first sensory input
+	 * @param rs
+	 *            , random seed used in the random generator of Arm
+	 */
+	public ModelFitter(int dimIn, double[] firstSensation, String modelType,
+			long rs) {
+
+		this.dimIn = dimIn;
+		this.dimOut = firstSensation.length;
+		this.rs = rs;
+		// Create a first forward model for every sensory dimension
+		// therefore, the output dimension is 1 for each forwardmodel.
+		models = new ModelList[dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			arguments[0] = this.dimIn;
+			arguments[1] = 1;   
+			arguments[2] = firstSensation[i];
+			arguments[3] = false; // intercept
+			arguments[4] = initialGain;
+			arguments[5] = lambda;
+			ForwardModel temp = null;
+			switch (modelType) {
+			case ("LSTMModel_master"):
+				temp = new ForwardModelList(arguments).LSTMModel_master();
+				break;
+			case ("LSTMModel"):
+				temp = new ForwardModelList(arguments).LSTMModel();
+				break;
+			case ("RLSModel"):
+				temp = new ForwardModelList(arguments).RLSModel();
+				break;
+			}
+			models[i] = new ModelList();
+			models[i].add(temp);
+		}
+
+		// Use the newly generated models as the currently active ones
+		this.currentModels = new int[dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			currentModels[i] = 0;
+		}
+
+		searchingTime = new int[dimOut];
+
+		this.temporaryModels = new ModelList[dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			temporaryModels[i] = new ModelList();
+		}
+
+		modelBackup = new ForwardModel[dimOut];
+
+		// Initialize the event boundary models
+		this.transitions = new EventBoundaryModels[dimOut];
+		this.surprisingSensations = new double[dimOut][dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			transitions[i] = new EventBoundaryModels();
+			surprisingSensations[i] = null;
+		}
+
+		this.latestSensation = firstSensation;
+
+		// Set how many forward models are allowed per dimension
+		// Attention: hard-coded!!!!
+		maxNrOfModels = new int[dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			maxNrOfModels[i] = 2;
+		}
+		maxNrOfModels[2] = 4;
+		maxNrOfModels[3] = 4;
+		maxNrOfModels[4] = 3;
+		maxNrOfModels[5] = 3;
+
+	}
+
+	/*
+	 * ---------- Predicting ----------
+	 */
+
+	/**
+	 * Predict the next sensory change using the currently active forward models
+	 * 
+	 * @param x double[] motor command to be performed
+	 * @return p double[] predicted sensory change.
+	 */
+	public double[] predict(double[] x) {
+		double[] p = new double[dimOut];
+		for (int i = 0; i < dimOut; i++) {
+			final int currentModel = currentModels[i];
+			final ModelList model = models[i];
+			final ForwardModel forwardModel = model.get(currentModel);
+			final double[] prediction = forwardModel.predict(x);
+			p[i] = prediction[0];
+		}
+		currentPrediction = p;
+		return p;
+	}
+
+	/*
+	 * --------------------------------------- Updating and switching forward
+	 * models MAIN METHOD!!! --------------------------------------
+	 */
+	/**
+	 * Main method of the architecture. The current sensory information is
+	 * compared to the predicted sensory information and the models are updated.
+	 * If a significant prediction error is detected the system searches for new
+	 * forward models
+	 * 
+	 * @param x
+	 *            , motor command performed in the last time step
+	 * @param y
+	 *            , change in sensory information received after executing the
+	 *            motor command
+	 * @param sensation
+	 *            , current sensory information
+	 * @param training
+	 *            , boolean stating if the models are updated (training = true)
+	 *            or not (training = false). In training phase this should be
+	 *            set to true and during testing to false.
+	 * @param modelRecommendations
+	 *            , if we want to force the architecture to pick specific
+	 *            models, this is set here. Another way to guarantee that the
+	 *            forward models get the right numbers to reward the correct
+	 *            transitions is by adding a new object type step by step and
+	 *            increasing the nr. of allowed models. Using model
+	 *            recommendations is easier but should not be used for
+	 *            architecture evaluation.
+	 */
+	public void doTimeStep(double[] x, double[] y, double[] sensation,
+			boolean training, int[] modelRecommendations, String modelType)  {
+		// Booleans stating whether an surprise was experienced for every
+		// sensory dimension
+		boolean[] surprising = new boolean[dimOut];
+
+		// Check for every sensory dimension if a surprise is experienced
+		for (int i = 0; i < dimOut; i++) {
+
+			ForwardModel m = models[i].get(currentModels[i]);
+			double errors = Math.abs(currentPrediction[i] - y[i]);
+			// Error detection component:
+			if (searchingTime[i] == 0 // The architecture is not already
+										// searching for this sensory dimension
+					&& errors > m.getMeanError() + 2.0
+							* Math.sqrt(m.getErrorVariance())) {// And the
+																// Prediction
+																// error
+																// is
+																// considered
+																// significant
+
+				surprising[i] = true;
+
+				// Searching period is started for sensory dimension i
+				searchingTime[i] = maxSearchingTime;
+				temporaryModels[i].clear();
+				// Copy all existing models for dimension i
+				for (int j = 0; j < models[i].size(); j++) {
+					temporaryModels[i].add(models[i].get(j).copy());
+				}
+				if (models[i].size() < maxNrOfModels[i] && training) {
+
+					ForwardModel temp = null;
+					switch (modelType) {
+					case ("LSTMModel_master"):
+						temp = new ForwardModelList(arguments)
+								.LSTMModel_master();
+						temporaryModels[i].add(temp);
+						break;
+					case ("LSTMModel"):
+						temp = new ForwardModelList(arguments).LSTMModel();
+						temporaryModels[i].add(temp);
+						break;
+					case ("RLSModel"):
+						temp = new ForwardModelList(arguments).RLSModel();
+						temporaryModels[i].add(temp);
+						break;
+					}
+				}
+				// Save a backup of the current model to undo changes if
+				// surprise leads to a new model
+				modelBackup[i] = models[i].get(currentModels[i])
+						.copyWithErrors();
+
+				// The preceding sensation triggered the surprise
+				surprisingSensations[i] = latestSensation;
+			}
+		}
+
+		// For debugging purposes count the sum of the prediction errors and
+		// print it into the terminal
+		this.sumOfErrors = 0.0;
+
+		for (int i = 0; i < dimOut; i++) {
+			ForwardModel m = models[i].get(currentModels[i]);
+			sumOfErrors += Math.abs(currentPrediction[i] - y[i]);
+			
+			if(searchingTime[i] == 0 && !surprising[i]){
+				String[] ss = {Math.abs(currentPrediction[i] - y[i]) + ", "};
+							Fileprinter.printInFile("errorDim" + i + "ModelNr" + currentModels[i], ss, rs);
+				}
+			
+			if (!surprising[i]) {
+				if (training) {
+					// Update the models only during training
+					if (undoModelChangesDuringSearching) {
+						// If model changes during searching are discarded, the
+						// models is not
+						// updated during searching period
+						if (searchingTime[i] == 0) {
+							m.update(x, y[i]);
+							m.updateError(Math.abs(currentPrediction[i] - y[i]));
+						}
+					} else {
+						
+						m.update(x, y[i]);
+						m.updateError(Math.abs(currentPrediction[i] - y[i]));
+					}
+
+				}
+
+				if (searchingTime[i] > 0) {
+					/*
+					 * Sensory dimension i is currently searching a new forward
+					 * model
+					 */
+
+					// Predict with every temporary model, then update the
+					// temporary models
+					for (int j = 0; j < temporaryModels[i].size(); j++) {
+						ForwardModel tm = temporaryModels[i].get(j);
+						double prediction = tm.predict(x)[0];
+						System.out.println(tm.getName());
+						tm.update(x, y[i]);
+						tm.updateError(Math.abs(prediction - y[i]));
+					}
+					searchingTime[i] -= 1;
+
+					// If searching is over, choose the model with the smallest
+					// error
+					if (searchingTime[i] == 0) {
+						double minError = Double.MAX_VALUE;
+						int bestModel = -1;
+						for (int j = 0; j < temporaryModels[i].size(); j++) {
+							double tmError = temporaryModels[i].get(j)
+									.getMeanError();
+							if (tmError < minError) {
+								minError = tmError;
+								bestModel = j;
+							}
+						}
+
+						// If model recommendations are used, pick the new model
+						// only based on the recommendations
+						if (modelRecommendations != null
+								&& modelRecommendations[i] != -1) {
+							bestModel = modelRecommendations[i];
+						}
+
+						// If the currently active model was updated during
+						// searching and did not win, use the back up of this
+						// model
+						if (bestModel != currentModels[i] || !training) {
+							models[i].set(currentModels[i], modelBackup[i]);
+							modelBackup[i] = null;
+						}
+
+						if (bestModel < models[i].size()) { // The model already
+															// existed
+							if (bestModel != currentModels[i]) {
+								if (training)
+									transitions[i].addTransition(
+											surprisingSensations[i],
+											currentModels[i], bestModel);
+							}
+							currentModels[i] = bestModel;
+						} else { // A new model is the best model
+							if (training) {
+								transitions[i].newDimension(models[i].size());
+								models[i].add(temporaryModels[i].get(bestModel));
+								transitions[i].addTransition(
+										surprisingSensations[i],
+										currentModels[i], bestModel);
+								currentModels[i] = bestModel;
+							}
+						}
+						surprisingSensations[i] = null;
+					}
+				}
+			}
+		}
+
+		// Update the event boundary representation if no model transition was
+		// detected
+		for (int i = 0; i < dimOut; i++) {
+			if (surprisingSensations[i] == null && training) {
+				transitions[i].addNoTransition(sensation, currentModels[i]);
+			}
+		}
+
+		// Print numbers of active forward models in terminal
+		// for (int i = 0; i < dimOut; i++) {
+		// if (searchingTime[i] == 0) {
+		// System.out.print(currentModels[i] + ", ");
+		// } else {
+		// System.out.print("S, ");
+		// }
+		// }
+		// Print sum of prediction error in terminal
+		System.out.println("Errors: " + sumOfErrors);
+		String[] ss = {(sumOfErrors/dimIn) + ", "};
+		Fileprinter.printInFile("meanError", ss, rs);
+		// Save the current sensory information for the next time step
+		latestSensation = sensation;
+	}
+
+	/*
+	 * --------------------- Inverse Kinematics ---------------------
+	 */
+
+	/**
+	 * Generate a motor command to reach a rewarding transition in a
+	 * goal-directed fashion
+	 * 
+	 * @param sensation
+	 *            , current sensory information
+	 * @param dim
+	 *            , for which dimension the transition should be rewarded
+	 * @return computed motor command or null if the system failed to compute a
+	 *         motor command
+	 */
+	public double[] goalDirectedInverseKinematics(double[] sensation, int dim) {
+
+		// Find if a reward can be received in one forward model transition
+		// (first order) or in two (second order)
+		LinkedList<int[]> firstOrderTransitions = new LinkedList<int[]>();
+		LinkedList<int[]> secondOrderTransitions = new LinkedList<int[]>();
+
+		for (int i = 0; i < rewardingTransitions.length; i++) {
+			if (rewardingTransitions[i][0] == currentModels[dim]) {
+				firstOrderTransitions.add(rewardingTransitions[i]);
+			} else {
+				int[] secondOrderTransition = { currentModels[dim],
+						rewardingTransitions[i][0] };
+				secondOrderTransitions.add(secondOrderTransition);
+			}
+		}
+		// If a reward can be received in one transition:
+		if (!firstOrderTransitions.isEmpty()) {
+			if (firstOrderTransitions.size() == 1) { // If only one possible
+														// transition is
+														// rewarding, try to
+														// reach this transition
+				return reachEventBoundary(sensation, dim, currentModels[dim],
+						firstOrderTransitions.getFirst()[1]);
+			} else { // if more than one possible transitions are rewarding, try
+						// to reach the nearest transition
+				return reachEventBoundary(
+						sensation,
+						dim,
+						currentModels[dim],
+						findNearestTransition(sensation, dim,
+								firstOrderTransitions));
+			}
+		}
+		// If an intermediate transition is necessary and only one exists:
+		if (secondOrderTransitions.size() == 1) {
+			return reachEventBoundary(sensation, dim, currentModels[dim],
+					secondOrderTransitions.getFirst()[1]);
+		}
+		// If an intermediate transition is necessary and there are multiple
+		// options, try to reach the nearest transition
+		return reachEventBoundary(sensation, dim, currentModels[dim],
+				findNearestTransition(sensation, dim, secondOrderTransitions));
+	}
+
+	/**
+	 * Compute a motor command using the inverted forward models to reach an
+	 * event boundary (= model transition)
+	 * 
+	 * @param sensation
+	 *            , current sensory information
+	 * @param dim
+	 *            , dimension for which a model transition is desired
+	 * @param from
+	 *            , number of the model that needs to be switched
+	 * @param to
+	 *            , number of the model that wants to be reached
+	 * 
+	 * @return computed motor command or null if the system failed to compute a
+	 *         motor command
+	 */
+	private double[] reachEventBoundary(double[] sensation, int dim, int from,
+			int to) {
+
+		System.out.println("Transition: " + from + " -> " + to);
+		// Pick the desired event boundary
+		GaussianModel g = transitions[dim].get(from, to);
+		if (g == null) {
+			return null;
+		}
+
+		// Perform gradient ascend on the event boundary model to determine the
+		// required change in sensation
+		double[] deltaSensation = g.inverseModelGradient(sensation);// g.gaussGradient(sensation);
+		for (int i = 0; i < dimOut; i++) {
+			// Catch the possibility of failed gradient ascend
+			if (Double.isNaN(deltaSensation[i])) {
+				return null;
+			}
+		}
+		// Transform the required change in sensation so that it is executable
+		// in one elementary movement
+		deltaSensation = transformDeltaSensation(deltaSensation);
+
+		return inverseKinematics(deltaSensation);
+	}
+
+	/**
+	 * Use the currently active forward models inversely to generate a motor
+	 * command to reach a desired change in sensory information
+	 * 
+	 * @param deltaS
+	 *            , the desired change in sensory information
+	 * @return computed motor command or null if the system failed to compute a
+	 *         motor command
+	 */
+	private double[] inverseKinematics(double[] deltaS) {
+		double[] x = new double[dimIn];
+		double nX = 0;
+		// Use the active forward model of every dimension i to compute a motor
+		// command
+		for (int i = 0; i < dimOut; i++) {
+			double[] xI = null;
+			xI = models[i].get(currentModels[i]).inverseForwardModelOtte(deltaS[i]);
+			if (xI != null) {
+				// The motor commands of all dimensions are summed
+				for (int j = 0; j < xI.length; j++) {
+					x[j] += xI[j];
+				}
+				nX++;
+			}
+		}
+		// If no inverse forward model generated a motor command
+		if (nX == 0) {
+			return null;
+		}
+		return x;
+	}
+
+	/**
+	 * Out of a list of possible event boundaries, pick the event boundary whose
+	 * mean sensory information is closest to the current sensory information
+	 * 
+	 * @param sensation
+	 *            , current sensory information
+	 * @param dim
+	 *            , sensory dimension considered
+	 * @param possibleTransitions
+	 *            , list of event boundaries
+	 * @return Index of the closest event boundary
+	 */
+	private int findNearestTransition(double[] sensation, int dim,
+			LinkedList<int[]> possibleTransitions) {
+		int bestTo = 0;
+		double similarityBestTo = Double.MAX_VALUE;
+		for (int i = 0; i < possibleTransitions.size(); i++) {
+			GaussianModel trans = this.transitions[dim].get(
+					possibleTransitions.get(i)[0],
+					possibleTransitions.get(i)[1]);
+			if (trans != null) {
+				double[] transMean = trans.getMean();
+				double similarity = euclidianDistance(sensation, transMean);
+				if (similarity < similarityBestTo) {
+					bestTo = i;
+					similarityBestTo = similarity;
+				}
+			}
+		}
+		return possibleTransitions.get(bestTo)[1];
+	}
+
+	/**
+	 * Transform a computed change in sensory information so that it is
+	 * reachable in one elementary movement. Here chosen heuristically by
+	 * building a unit vector and multiplying with a factor (7)
+	 * 
+	 * @param deltaS
+	 *            , change in sensory information
+	 * @return Normalized sensory information
+	 */
+	private double[] transformDeltaSensation(double[] deltaS) {
+		double maxVal = Double.MIN_VALUE;
+		for (int i = 0; i < deltaS.length; i++) {
+			if (Math.abs(deltaS[i]) > maxVal) {
+				maxVal = Math.abs(deltaS[i]);
+			}
+		}
+		for (int j = 0; j < deltaS.length; j++) {
+			deltaS[j] *= 7.0 / maxVal;
+		}
+		return deltaS;
+	}
+
+	private double euclidianDistance(double[] x, double[] y) {
+		double res = 0;
+		for (int i = 0; i < x.length; i++) {
+			res += (x[i] - y[i]) * (x[i] - y[i]);
+		}
+		return Math.sqrt(res);
+	}
+
+	/*
+	 * ----------- Other stuff -----------
+	 */
+
+	/**
+	 * Change the number of models allowed for one sensory dimension
+	 * 
+	 * @param dim
+	 *            , sensory dimension for which the number of models are
+	 *            increased
+	 */
+	public void increaseMaxNrOfModels(int dim) {
+		maxNrOfModels[dim]++;
+	}
+
+	/**
+	 * Print log-files when the program finished running
+	 * 
+	 * @param rs
+	 *            , random seed helpful to distinguish between different
+	 *            simulation runs
+	 */
+	public void finishPrint(long rs) {
+		/*
+		 * To whatever you want here
+		 */
+	}
+
+	/**
+	 * Is the architecture currently searching for new models?
+	 * 
+	 * @return boolean stating whether the system searches new models
+	 */
+	public boolean isSearching() {
+		for (int i = 0; i < dimOut; i++) {
+			if (searchingTime[i] != 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Is the architecture currently searching for new models for one sensory
+	 * dimension?
+	 * 
+	 * @param dim
+	 *            , sensory dimension
+	 * @return boolean stating whether the system searches a new model for
+	 *         dimension dim
+	 */
+	public boolean isSearching(int dim) {
+		return searchingTime[dim] != 0;
+
+	}
+
+	/**
+	 * The error is return to Arm.doTimeStep and print into .txt file for every
+	 * sensory dimension
+	 */
+	public double getErrorsPerDim() {
+
+		return sumOfErrors;
+	}
+
+	/** The printWeights serialize ModelList[] into "LSTM_weight.bin" */
+	public void writeWeights() {
+
+		System.out.println("Writing Weights...");
+
+		try {
+			FileOutputStream fs = new FileOutputStream("ModelList.bin");
+
+			ObjectOutputStream os = new ObjectOutputStream(fs);
+
+			ModelList[] modellist = models.clone();
+
+			os.writeObject(modellist);
+			os.close();
+
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	public ModelList[] readWeights() {
+		System.out.println("Reading Objects...");
+
+		ModelList[] modellist = null;
+		try {
+			FileInputStream fi = new FileInputStream("ModelList.bin");
+
+			ObjectInputStream os = new ObjectInputStream(fi);
+
+			modellist = (ModelList[]) os.readObject();
+
+			os.close();
+
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (ClassNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		return modellist;
+
+	}
+}

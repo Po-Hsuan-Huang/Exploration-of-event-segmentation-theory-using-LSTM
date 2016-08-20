@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Extract local variable &apos;readObject&apos; from expression &apos;os.readObject()&apos;&#x0A;- Original project: &apos;DiskWorldEAR&apos;&#x0A;- Variable name: &apos;readObject&apos;&#x0A;- Destination method: &apos;EventSegmentationArchitecture.TestSite.readWeights()&apos;&#x0A;- Variable expression: &apos;os.readObject()&apos;&#x0A;- Replace occurrences of expression with variable" description="Extract local variable &apos;readObject&apos;" final="false" id="org.eclipse.jdt.ui.extract.temp" input="/src&lt;EventSegmentationArchitecture{TestSite.java" name="readObject" replace="true" selection="1984 15" stamp="1460487183531" version="1.0"/>
+</session>

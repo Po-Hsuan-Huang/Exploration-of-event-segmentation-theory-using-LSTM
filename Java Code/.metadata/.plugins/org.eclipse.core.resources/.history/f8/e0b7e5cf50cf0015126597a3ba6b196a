@@ -1,0 +1,46 @@
+public class Frog {
+	
+	// it is called encapsulation cause we 
+	// hide the variables inside the class.
+	private String name;
+	int age;
+	public void setName(Strign newName){
+		name = newName;	
+	}
+	public void setAge(int newAge){
+		age = newAge;
+	}
+	public String getName() {
+		return name;
+	}
+	public int getAge(){
+		return age;
+	}
+	
+	
+	
+}
+
+
+
+
+
+public class Setter {
+
+	
+	public static void main(String[] args) {
+
+		Frog frog1 = new Frog();
+		// What we used to do:
+		//frog1.name= "Bard"
+		//frog1.age = 24;
+		
+		frog1.setName("Bard");
+		frog1.setAge(24);
+		
+		System.out.println(frog1.getName(),frog1.getAge());
+		
+				
+	}
+
+}

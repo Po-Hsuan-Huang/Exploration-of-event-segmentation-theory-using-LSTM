@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Encapsulate field &apos;HLSTM.seedManual&apos; in &apos;HLSTM&apos;&#x0A;- Original project: &apos;GateDetect1D&apos;&#x0A;- Original element: &apos;HLSTM.seedManual&apos;&#x0A;- Getter method name: &apos;getSeedManual&apos;&#x0A;- Setter method name: &apos;setSeedManual&apos;&#x0A;- Field visibility: &apos;private&apos;&#x0A;- Use getter and setter methods in declaring type" comments="false" declaring="true" description="Encapsulate field &apos;seedManual&apos;" flags="589830" getter="getSeedManual" id="org.eclipse.jdt.ui.self.encapsulate" input="/src&lt;{HLSTM.java[HLSTM^seedManual" insertion="23" setter="setSeedManual" stamp="1466090684208" version="1.0" visibility="2"/>
+</session>

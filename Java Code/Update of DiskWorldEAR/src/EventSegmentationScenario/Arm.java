@@ -1,0 +1,1015 @@
+package EventSegmentationScenario;
+
+import java.awt.Color;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Random;
+
+import EventSegmentationArchitecture.ModelFitter;
+import EventSegmentationScenario.MyDemoLauncher.MyDemo;
+import diskworld.Disk;
+import diskworld.DiskComplex;
+import diskworld.DiskMaterial;
+import diskworld.DiskType;
+import diskworld.Environment;
+import diskworld.actions.DiskAction;
+import diskworld.actions.Joint;
+import diskworld.actions.JointActionType;
+import diskworld.environment.AgentMapping;
+import diskworld.environment.FloorCellType;
+import diskworld.visualization.VisualizationOptions;
+import diskworld.visualization.VisualizationSettings;
+
+public class Arm implements MyDemo{
+	
+	// For ANN, read the previously trained weights ?
+	boolean readModelList = true;
+	// For ANN, write the weights after training?
+	boolean writeModelList = true;
+	
+	/*
+	 * --------------------------------
+	 * 		PARAMETERS
+	 * --------------------------------
+	 */
+	
+	/** The environment of this simulation*/
+	private Environment env;
+	
+	/** The event segmentation architecture*/
+	private ModelFitter models;
+
+	/**
+	 * Specify forward model type
+	 */
+	static String modelType = "LSTMModel";
+
+	/**Dimensions of sensory and motor information*/
+	public static int xSize = 5; 
+	public static int ySize = 8;
+	
+	/** Mouth position and radius*/
+	private double mouthCenterX = 52.5;
+	private double mouthCenterY = 52.5;
+	private double mouthRadius = 2;
+	
+	/** Radius of the workspace*/
+	private double workspaceRadius = 45.0;
+	
+	/** Radius around the mouth in which objects are generated*/
+	private double objectGenerationRadius = 10.0;
+	
+	/** Colors of the objects*/
+	private int BURRDOCK = 0;
+	private int HEAVYBURRDOCK = 100;
+	private int FLY = 200;
+	
+	/** The disks used in the simulation*/
+	private Disk body;
+	private Joint[] upperArmJoints;
+	private Joint[] forearmJoints;
+	private Joint handjoint;
+	private LinkedList<Disk> allDisks;
+	private InteractableObjects object;
+	
+	/** Number of joints and limbs in the two prismatic joints*/
+	private int numUpperArmLimbs;
+	private int numPerUpperArmLimbs;
+	private int numForearmLimbs;
+	private int numPerForearmLimbs;
+	
+	/** Do you want to include hand rotation?*/
+	private boolean includeRotation = false;
+	
+	/** Do you want to recommend the architecture which model number to pick?*/
+	private boolean useModelRecommendations = true;
+	
+	/**Size of the motor noise used*/
+	private double motorNoiseSize = 0.2;
+	
+	/**Random generator and random seed*/
+	private Random rand;
+	private long rs;
+	
+	/**Rest */
+	private Arm arm = this;
+	private long miliseconds = 1;
+	private int time = 0;
+	private boolean simulationOver = false;
+	
+	/*
+	 * --------------------------------------------------------------
+	 * Storing data for supervised control and sensation generation
+	 * --------------------------------------------------------------
+	 */
+	private int timeMovePerformed = 0;
+	private double[] lastCommand = null;
+	private double[] lastHandPos = new double[2]; 
+	private int slowDown = 0;
+	/** Haptic feedback when touching an object*/
+	private double hapticX;
+	private double hapticY;
+	/** Distance of hand to burrdock when touching a burrdock*/
+	private double distanceHandBurrX = 0.0;
+	private double distanceHandBurrY = 0.0;
+	/**How many objects of each type where interacted with */
+	private int[] objectsInteractedWith = new int[3];
+
+	/*
+	 * ---------------------------
+	 * Training/Testing parameters
+	 * ---------------------------
+	 */
+	
+	/** Number of training and testing phases completed until the simulation stops*/
+	public static int numberOfTestingRuns = 10;
+	
+	/**Number of positions per object used in each trainings phase*/
+	public static int numberOfTrainingPos = 5;
+	
+	private LinkedList<Integer> objectType;
+	private boolean training;
+	private boolean movingHandBeforeTesting = false;
+	private int trialNr;
+	private int testingPosNr;
+	
+	/** If this is set, the forward models are not used for inverse kinematics*/
+	private boolean alwaysSupervised = false;
+	
+	/**How much time does the architecture have to interact with each object*/
+	private int maxTimeForInteraction = 1000;
+	// space the supervisor presence by 999999 steps
+	private int timeForInteraction = 1000;//maxTimeForInteraction;
+	
+	/** Positions tested during testing phase*/
+	private double[][] testingPos = {{37.5, 37.5}, {37.5, 67.5}, {67.5, 37.5}, {67.5, 67.5}};
+	
+	/**
+	 * FILLER OBJECTS:
+	 * Filler objects are objects without an effect that appear at the end of each training/testing phase
+	 * and are removed after 20 time steps. They solely exist so that the training/testing phase does not
+	 * stop after the last "real" object is removed but continues for 20 time steps, so that architecture
+	 * has enough time to search new models before exiting a phase. These objects are not reachable. They
+	 * are used (instead of not using a object), so that there still is always one object present at all
+	 * times.
+	 */
+	/**Color of filler objects (black/not visible)*/
+	private int FILLER = 300;
+	
+	/**
+	 * Counter, counts down if a filler object is in the workspace. If the counter
+	 * hits 0 the filler object is removed
+	 */
+	// TODO space the next scenareo by 999999 steps
+	private int fillerCounter = 1500;//maxTimeForInteraction;
+	
+	/** Position where the filler object will appear (not reachable)*/
+	private double fillerPosX = 50;
+	private double fillerPosY = 95;
+	
+	/*
+	 * ---------------------------------------
+	 * 		METHODS
+	 * ---------------------------------------
+	 */
+	
+	/**
+	 * Constructor
+	 * @param rand, the random generator used
+	 * @param rs, the seed used to initialize the random generator
+	 * @param modelfitter, the event segmentation architecture
+	 * @param training, boolean stating if the simulation is a training phase (true) or testing phase (false)
+	 * @param ObjectType, list containing the types of objects that will be generated during this phase
+	 * @param trialNr, number of this phase
+	 * @param testingPosNr, which position is tested if this simulation is testing phase
+	 */
+	public Arm(Random rand, long rs, ModelFitter modelfitter, boolean training,
+					LinkedList<Integer> ObjectType, int trialNr, int testingPosNr){
+		this.rand = rand;
+		this.rs = rs;
+		this.models = modelfitter;
+		this.training = training;
+		this.objectType = ObjectType;
+		this.trialNr = trialNr;
+		this.testingPosNr = testingPosNr;
+	}
+	
+	/**
+	 * Main method of the simulation
+	 * @param args, input arguments. Must at least contain 1 char to generate a random seed
+	 */
+	public static void main(String[] args) {
+		//Initialize the random generator
+		//long rs = (long)args[0].charAt(0);
+		long rs = 1;
+		Random rand = new Random(rs);
+		
+		//Initialize the architecture
+		double[] firstSensation = {0, 0, 0, 0, 0, 0, 0, 0};
+		ModelFitter modelFitter = new ModelFitter(xSize, firstSensation, modelType,rs);
+
+		
+		//Create the first training set
+		LinkedList<Integer> objectTypes = new LinkedList<Integer>();
+		//The first object ever is a filler object
+		objectTypes.add(300);
+		for(int i = 2; i >= 0; i--){
+			for(int j = 0; j < numberOfTrainingPos; j++){
+				objectTypes.add((Integer) i * 100);
+			}
+		}
+		//A filler object is always the last object
+		objectTypes.add(300);
+		
+		for(int runs = 0; runs < numberOfTestingRuns; runs++){
+			modelFitter = MyDemoLauncher.runDemo(new Arm(rand, rs, modelFitter, true, objectTypes, runs, -1));
+			
+			//Test all 4 testing positions for all 3 objects
+			for(int type = 0; type < 201; type+=100){
+				for(int testingPos = 0; testingPos < 4; testingPos++){
+					objectTypes.add(type);
+					//A filler object is always the last object
+					objectTypes.add(300);
+					modelFitter = MyDemoLauncher.runDemo(new Arm(rand, rs, modelFitter, false, objectTypes, runs, testingPos));
+				}
+			}
+			
+			//Initialize training set
+			for(int i = 2; i >= 0; i--){
+				for(int j = 0; j < numberOfTrainingPos; j++){
+					objectTypes.add((Integer) i * 100);
+				}
+			}
+			Collections.shuffle(objectTypes, rand);	
+			//A filler object is always the last object
+			objectTypes.add(300);
+		}
+	}
+	
+	/**
+	 * Construct the environment containing the arm and one object
+	 * used in the simulation
+	 */
+	public Environment initialize(){
+		
+		// create environment
+		int sizex = 100;
+		int sizey = 100;
+		env = new Environment(sizex, sizey);
+		
+		// Sizes of the disks
+		double bodySize = 5;
+		double jointSize = 1;
+		//double handSize = 0.375;
+		double limbSize = 0.2;
+		
+		// Types of the disks
+		DiskType rootType = new DiskType(DiskMaterial.DOUGH.withColor(Color.ORANGE));
+		DiskType upperJointType = new DiskType(DiskMaterial.DOUGH.withColor(Color.RED));
+		DiskType lowerJointType = new DiskType(DiskMaterial.DOUGH.withColor(Color.MAGENTA));
+		DiskType limbType = new DiskType(DiskMaterial.DOUGH.withColor(Color.BLUE));
+		DiskType handJointType = new DiskType(DiskMaterial.DOUGH.withColor(Color.GREEN));
+		//DiskType handType = new DiskType(DiskMaterial.DOUGH.withColor(Color.YELLOW));
+	
+		
+		//construct body
+		body = env.newFixedRoot(sizex/8, sizey/8, bodySize, 0, rootType);
+		Disk d = body;
+		allDisks = new LinkedList<Disk>();
+		allDisks.add(d);
+		
+		// construct upper arm
+		numUpperArmLimbs = 6;
+		numPerUpperArmLimbs = 20;
+		upperArmJoints = new Joint[numUpperArmLimbs + 1];
+		upperArmJoints[0] = body.attachJoint(0, jointSize, 0, upperJointType);
+		upperArmJoints[0].setRange(JointActionType.ActionType.SPIN, Math.toRadians(-80), 0);
+		d = upperArmJoints[0];
+		allDisks.add(d);
+		for (int i = 0; i < numUpperArmLimbs; i++) {
+			if (i > 0) {
+				upperArmJoints[i] = d.attachJoint(0, jointSize, 0, upperJointType);
+				// limit all joints 
+				if(i % 2 == 0){
+					upperArmJoints[i].setRange(JointActionType.ActionType.SPIN, Math.toRadians(-160), Math.toRadians(0));	
+				}
+				else{
+					upperArmJoints[i].setRange(JointActionType.ActionType.SPIN, Math.toRadians(0), Math.toRadians(160));		
+				}
+				d = upperArmJoints[i];
+				allDisks.add(d);
+			}
+			for (int j = 0; j < numPerUpperArmLimbs; j++) {
+				d = d.attachDisk(0, limbSize, limbType);
+				allDisks.add(d);
+			}
+		}
+		upperArmJoints[numUpperArmLimbs] = d.attachJoint(0, jointSize, 0, upperJointType);
+		if(numUpperArmLimbs % 2 == 0){
+			upperArmJoints[numUpperArmLimbs].setRange(JointActionType.ActionType.SPIN, Math.toRadians(-80), Math.toRadians(0));	
+		}
+		else{
+			upperArmJoints[numUpperArmLimbs].setRange(JointActionType.ActionType.SPIN, Math.toRadians(0), Math.toRadians(80));		
+		}
+		d = upperArmJoints[numUpperArmLimbs];
+		allDisks.add(d);
+		
+		
+		// construct forearm
+		numForearmLimbs = 6;
+		numPerForearmLimbs = 20;
+		forearmJoints = new Joint[numForearmLimbs + 1];
+		forearmJoints[0] = d.attachJoint(0, jointSize, Math.toRadians(90), lowerJointType);
+		forearmJoints[0].setRange(JointActionType.ActionType.SPIN, Math.toRadians(10), Math.toRadians(90));	
+		d = forearmJoints[0];
+		allDisks.add(d);
+				
+		for (int i = 0; i < numForearmLimbs; i++) {
+			if (i > 0) {
+				forearmJoints[i] = d.attachJoint(0, jointSize, 0, lowerJointType);
+				// limit all joints 
+				if(i % 2 == 0){
+					forearmJoints[i].setRange(JointActionType.ActionType.SPIN, Math.toRadians(-160), Math.toRadians(0));	
+				}
+				else{
+					forearmJoints[i].setRange(JointActionType.ActionType.SPIN, Math.toRadians(0), Math.toRadians(160));		
+				}
+				d = forearmJoints[i];
+				allDisks.add(d);
+			}
+			for (int j = 0; j < numPerForearmLimbs; j++) {
+					d = d.attachDisk(0, limbSize, limbType);
+					allDisks.add(d);
+			}
+		}
+		
+		forearmJoints[numForearmLimbs] = d.attachJoint(0, jointSize, 0, lowerJointType);
+		if(numForearmLimbs % 2 == 0){
+			forearmJoints[numForearmLimbs].setRange(JointActionType.ActionType.SPIN, Math.toRadians(-80), Math.toRadians(0));	
+		}
+		else{
+			forearmJoints[numForearmLimbs].setRange(JointActionType.ActionType.SPIN, Math.toRadians(0), Math.toRadians(80));		
+		}
+		d = forearmJoints[numForearmLimbs];
+		allDisks.add(d);
+		
+		//create the hand
+		handjoint = d.attachJoint(0, jointSize * 3.5, Math.PI/2, handJointType);
+		handjoint.setRange(JointActionType.ActionType.SPIN, Math.toRadians(-90), Math.toRadians(90));
+		allDisks.add(handjoint);
+		handjoint.setZLevel(1);
+		
+		//If you want an L-shaped hand (for rotation):
+		/*Disk firstHand = handjoint.attachDisk(0, handSize, handType);
+		d = firstHand;
+		allDisks.add(d);
+		int handLength = 12;
+		for(int i = 0; i < handLength; i++){
+			d = d.attachDisk(0, handSize, handType);
+			d.setZLevel(1);
+			allDisks.add(d);
+		}
+		d = firstHand.attachDisk(Math.PI/2, handSize, handType);
+		for(int i = 1; i < handLength; i++){
+			d = d.attachDisk(0, handSize, handType);
+			allDisks.add(d);
+			d.setZLevel(1);
+		}*/		
+		
+		//Color the floor black, the mouth is colored red
+		this.setFloor(env, FloorCellType.FULL, FloorCellType.BURRKILLER);
+		
+		//Create the object
+		int newType = (int) objectType.pop();
+		double[] pos = generateNewObjectPosition();
+	
+		if(newType == HEAVYBURRDOCK){
+			object = new HeavyBurrdock(env, pos[0], pos[1], 0,  handjoint.getDiskType(), arm);
+		}
+		else if (newType == BURRDOCK){
+			object = new Burrdock(env, pos[0], pos[1], 0,  handjoint.getDiskType(), arm);
+		}
+		else if(newType == FLY){
+			object = new Fly(env, pos[0], pos[1], arm);
+		}
+		else if(newType == FILLER){
+			object = new FillerObject(env, fillerPosX, fillerPosY);
+		}
+		
+		//Initialize the haptic sensors with noise
+		this.hapticX = rand.nextDouble();
+		this.hapticY = rand.nextDouble();
+
+		return env;
+	}
+	
+	/**
+	 * Determine how the motor commands influence the agent's
+	 * kinematics
+	 */
+	public AgentMapping[] getAgentMappings() {
+		// create possible ego-motion actions
+		List<DiskAction> actions = new LinkedList<DiskAction>();
+		// set max angular speed of joint rotations
+		double maxAngularChange = 2.0;
+		// first joint is controlled by target angle
+		actions.add(upperArmJoints[0].createJointAction("upperarmJoint#0", maxAngularChange, JointActionType.ActionType.SPIN, JointActionType.ControlType.CHANGE)); //TARGET
+		// other joints are controlled by angle change
+		for (int i = 1; i < upperArmJoints.length; i++) {
+			actions.add(upperArmJoints[i].createJointAction("upperarmJoint#" + i, maxAngularChange, JointActionType.ActionType.SPIN, JointActionType.ControlType.CHANGE));
+		}
+		for (int i = 0; i < forearmJoints.length; i++) {
+			actions.add(forearmJoints[i].createJointAction("forearmJoint#" + i, maxAngularChange, JointActionType.ActionType.SPIN, JointActionType.ControlType.CHANGE));
+		}
+		actions.add(handjoint.createJointAction("hand", maxAngularChange, JointActionType.ActionType.SPIN, JointActionType.ControlType.CHANGE));
+		
+		return new AgentMapping[] { new AgentMapping(actions) };
+	}
+	
+	
+	
+	/*
+	 * ---------------------------
+	 * Adding or removing objects
+	 * ---------------------------
+	 */
+	
+	/**
+	 * Determines when an object can be removed
+	 * @return boolean, stating whether the current object can be removed
+	 */
+	public boolean objectToBeRemoved(){
+		
+		//If the object is a fly and it is about to hit the wall
+		if(object.getType() == FLY){
+			if(object.getX() > 96 || object.getY() > 96 || object.getX() < 4 || object.getY() < 4){
+				return true;
+			}
+		}
+		
+		//A filler object is removed if the count down hits zero
+		if(object.getType() == FILLER && fillerCounter == 0){
+			return true;
+		}
+		
+		/*
+		 * To avoid degeneration of models, remove an object only if the architecture is not
+		 * in a searching period.
+		 * This is a bit of cheating, so for testing try removing this part
+		 */
+		if(models.isSearching()){
+			return false;
+		}
+		
+		// Remove fly if they exit the workspace
+		if(object.getType() == FLY){
+			return euclidianDistance(object.getX(), object.getY(), 52.5, 52.5) > workspaceRadius;
+		}
+		
+		//Remove burrdocks if they are inside the mouth 
+		return euclidianDistance(object.getX(), object.getY(), 52.5, 52.5) < mouthRadius;
+	}
+	
+	
+	/**
+	 * Remove the currently present object
+	 */
+	public void removeObject(){
+		if(object != null){
+			object.remove();
+			object = null;
+		}
+	}
+	
+	/**
+	 * Generate a new position for an object.
+	 * In training generate the position randomly. In testing use
+	 * fixed positions.
+	 * @return Array containing the x- and y-coordinates of the position
+	 */
+	public double[] generateNewObjectPosition(){
+		//In testing generate the object position based on the testing set of positions
+		if(!training){
+			return testingPos[testingPosNr];
+		}
+		//Else generate the object around the mouth area within a specific radius
+		double objectRadius = 3.75; //biggest possible radius for an object
+		double[] pos = new double[2];
+		boolean notFinished = true;
+		while(notFinished){
+			pos[0] = rand.nextDouble() * 100;
+			pos[1] = rand.nextDouble() * 100;
+			notFinished = false;
+			for(Disk d: allDisks){
+				//If the position is to close to the arm and the disks would overlap generate a new position
+				if(euclidianDistance(pos[0], pos[1], d.getX(), d.getY()) < objectRadius + d.getRadius()){
+					notFinished = true;
+				}
+			}
+			if(euclidianDistance(pos[0], pos[1], mouthCenterX, mouthCenterY) < mouthRadius + objectGenerationRadius){
+				notFinished = true;
+			}
+			if(euclidianDistance(pos[0], pos[1], mouthCenterX, mouthCenterY) > 25){
+				notFinished = true;
+			}
+		}
+		return pos;
+	}
+	
+	
+	
+	/*
+	 *-----------------------
+	 * Moving the arm
+	 *-----------------------
+	 */
+	
+	/**
+	 * Move the arm randomly
+	 * @param time, current time step of the simulation
+	 * @return double array stating the random motor command
+	 */
+	private double[] randomMovement(int time){
+		double[] commands = new double[xSize];
+		if(Math.abs(lastHandPos[0] - handjoint.getX()) < 0.00001 || Math.abs(lastHandPos[1] - handjoint.getY()) < 0.00001){
+			timeMovePerformed = 0;
+		}
+		if(timeMovePerformed == 0){
+			commands[0] = rand.nextDouble() * 2 -1;
+			commands[1] = rand.nextDouble() * 2 -1;
+			if(includeRotation)
+				commands[2] = (rand.nextDouble()  - 0.5) * 2;
+			timeMovePerformed = rand.nextInt(200);
+			lastCommand = commands;
+		}
+		else{
+			commands[0] = lastCommand[0];
+			commands[1] = lastCommand[1];
+			if(includeRotation)
+				commands[2] = lastCommand[2];
+			timeMovePerformed--;
+		}
+		commands[0] += ( rand.nextDouble() * 0.02 - 0.01);
+		commands[1] += ( rand.nextDouble() * 0.02 - 0.01);
+		return commands;
+	}
+	
+	/**
+	 * Perform the required movement for an object interaction in an
+	 * optimal manner.
+	 * @return double array containing the motor command
+	 */
+	private double[] supervisedControll(){
+		double[] motor = new double[2];
+		if(object.isMerged()){
+			motor[0] = 52.5 - object.getX();
+			motor[1] = 52.5 - object.getY();
+		}
+		else{
+			motor[0] = object.getX() - handjoint.getX();
+			motor[1] = object.getY() - handjoint.getY();
+		}
+		return motor;
+	}
+
+	/**
+	 * The controller.
+	 */
+	@Override
+	public MyAgentController[] getControllers() {
+		// the controller of the agent
+		MyAgentController controller = new MyAgentController() {
+			
+			
+			double[] lastSensation = getSensation();
+			
+			/**
+			 * Checks if an object needs to be removed.
+			 * Computes a motor command and applies the changes to the joints.
+			 */
+			@Override
+			public void doTimeStep(double[] sensorValues, double[] actuatorValues) {
+				
+				/*
+				 * -------------------------------------------------------------------------------------------
+				 * 1. Check if the object needs to be removed and in which phase (training/testing/stretching)
+				 * the arm is currently in
+				 * 
+				 * 
+				 * Each timeStep is executed through MyDemoLauncher.runDeom , in which the DoTimeStep of 
+				 * Model Fitter is executed. 
+				 * -------------------------------------------------------------------------------------------
+				 */
+				
+				time++;
+				// The system only has a certain amount of time for an object interaction
+				timeForInteraction--;
+				
+				//The countdown for a filler object is decreased
+				fillerCounter--;
+
+				//Check if the object needs to be removed
+				if(objectToBeRemoved() 
+						||(!training && timeForInteraction <= 0)){
+					
+					//Remove old object and generate a new one
+					int newType;
+					removeObject();
+					double[] pos;
+					if(objectType.size() ==0){
+						simulationOver = true;
+						newType = FILLER;
+						double[] posFinal = {fillerPosX, fillerPosY};
+						pos = posFinal;
+					}
+					else{
+						newType = (int) objectType.pop();
+						pos = generateNewObjectPosition();
+					}
+					if(newType == HEAVYBURRDOCK){
+						object = new HeavyBurrdock(env, pos[0], pos[1], 0,  handjoint.getDiskType(), arm);
+					}
+					else if (newType == BURRDOCK){
+						object = new Burrdock(env, pos[0], pos[1], 0,  handjoint.getDiskType(), arm);
+					}
+					else if(newType == FLY){
+						object = new Fly(env, pos[0], pos[1], arm);
+					}
+					else if(newType == FILLER){
+						object = new FillerObject(env, fillerPosX, fillerPosY);
+						fillerCounter = 200;
+					}
+					
+					//After every removal the arm slows down
+					slowDown();
+					//Reset the time the architecture has for interacting
+					timeForInteraction = maxTimeForInteraction;
+				}
+				
+				/*
+				 * Print in terminal in which phase the scenario is (training/testing), if the
+				 * arm is currently stretching and how long this interaction took
+				 */
+				System.out.println("Training " + training
+									+ ", InteractionTime " + timeForInteraction);
+				
+				
+				/*
+				 * --------------------------------------------
+				 * 2. Generate the motor command
+				 * --------------------------------------------
+				 */
+				
+				//Compute the motor command
+				double[] motorCommand; 
+				if(movingHandBeforeTesting || alwaysSupervised){
+					motorCommand = supervisedControll();
+				}
+				else{
+					if(timeForInteraction > 0 || !training)
+						//If the arm still has time to interact or is in testing, the motor command
+						//is computed by inverting the forward models
+						motorCommand = models.goalDirectedInverseKinematics(getSensation(), 2);
+					else
+						//The motor command is computed by a supervising algorithm
+						motorCommand = supervisedControll();
+				}
+				
+				//Transform the motor command in commands that can be passed onto the actuator
+				double[] jointCommand = new double[3];
+				if(motorCommand != null){
+					int lim = 2;
+					if(includeRotation){
+						lim = 3;
+					}
+					for(int i = 0; i < lim; i++){
+						if(motorCommand[i] > 1.0){
+							jointCommand[i] = 1.0;
+						}
+						else if(motorCommand[i] < -1.0){
+							jointCommand[i] = -1.0;
+						}
+						else{
+							jointCommand[i] = motorCommand[i];
+						}
+						//add motor noise
+						jointCommand[i] += rand.nextGaussian() * motorNoiseSize; 
+					}
+				}
+				else{ //if the system failed to compute a motor command, perform random movement
+					jointCommand = randomMovement(time);
+				}
+				
+				lastHandPos[0] = handjoint.getX();
+				lastHandPos[1] = handjoint.getY();
+				
+				//If the arm is slowed down, the motor commands are multiplied by 0.1
+				if(slowDown > 0){
+					for(int i = 0; i < jointCommand.length; i++)
+						jointCommand[i] = 0.1 * jointCommand[i];
+					slowDown--;
+				}
+				else if( object.getType() == HEAVYBURRDOCK && body.getDiskComplex().equals(object.getDisk().getDiskComplex())){
+					//if a heavy burrdock is attached to the arm the motor commands are decreased as well
+					for(int i = 0; i < jointCommand.length; i++)
+						jointCommand[i] = 0.5 * jointCommand[i];
+				}	
+				
+				
+				/*
+				 * ------------------------------------------------
+				 * 3. Apply the motor command to the joints
+				 * ------------------------------------------------
+				 */
+				
+				for(int i = 0; i < actuatorValues.length; i++)
+					actuatorValues[i] = 0.0;
+				
+				for(int i = 0; i < upperArmJoints.length ; i++){
+					if(i == 0 || i == numUpperArmLimbs){
+						actuatorValues[i] = 0.5 * jointCommand[0];
+					}
+					else{
+						if(i%2 == 1){
+							actuatorValues[i] = -1 * jointCommand[0];
+						}
+						else{
+							actuatorValues[i] = jointCommand[0];
+						}
+					}
+				}
+				
+				for(int i = upperArmJoints.length; i < upperArmJoints.length + forearmJoints.length; i++){
+					if(i == upperArmJoints.length || i == upperArmJoints.length + numForearmLimbs){
+						actuatorValues[i] = 0.5 * jointCommand[1];
+					}
+					else{
+						if(i%2 == 0){
+							actuatorValues[i] = -1 * jointCommand[1];
+						}
+						else{
+							actuatorValues[i] = 1 * jointCommand[1];
+						}
+					}
+				}
+				
+				//Rotate hand according to command
+				if(includeRotation)
+					actuatorValues[upperArmJoints.length + forearmJoints.length] = jointCommand[2];	
+			}
+			
+			/**
+			 * Predict the sensory changes according to the models.
+			 * Update the models with the real sensory changes
+			 */
+			@Override
+			public void doAfterTimeStep() {
+
+				double[] newSensation = getSensation();
+				
+				//Determine how x looks like
+				double[] x = new double[xSize];
+				x[0] = newSensation[0] - lastSensation[0];
+				x[1] = newSensation[1] - lastSensation[1];
+				x[2] = hapticX;
+				x[3] = hapticY;
+				x[4] = newSensation[6] - lastSensation[6];
+				
+				if( object.getType() == HEAVYBURRDOCK && body.getDiskComplex().equals(object.getDisk().getDiskComplex())){
+					for(int i = 0; i < 2; i++)
+						x[i] = 2 * x[i];
+				}
+				
+				//Predict with all active forward models
+				models.predict(x);
+				
+				
+				//Create y, the real change in sensory values
+				double[] y = new double[ySize];
+				for(int i = 0; i < ySize; i++){
+					y[i] =  newSensation[i] - lastSensation[i];
+				}
+				
+				//Dont use modelRecommendations if you want the model to learn by itself
+				// use only for debugging purposes or if you want to compare the exact models used
+				int[] modelRecommendations = null;
+				if(useModelRecommendations){
+					if(object.getType() == FLY){
+						if(object.hasMoved()){
+							int[] mR = {0, 0, 1, 1, 1, 1, 0, 0};
+							modelRecommendations = mR;
+						}
+						else{
+							int[] mR = {0, 0, 0, 0, 0, 0, 0, 0};
+							modelRecommendations = mR;
+						}
+					}
+					else if(object.getType() == BURRDOCK){
+						if(object.isMerged()){
+							int[] mR = {0, 0, 3, 3, 2, 2, 0, 0};
+							modelRecommendations = mR;
+						}
+						else{
+							int[] mR = {0, 0, 0, 0, 0, 0, 0, 0};
+							modelRecommendations = mR;
+						}
+					}
+					else{
+						if(object.isMerged()){
+							int[] mR = {1, 1, 2, 2, 2, 2, 0, 0};
+							modelRecommendations = mR;
+						}
+						else{
+							int[] mR = {0, 0, 0, 0, 0, 0, 0, 0};
+							modelRecommendations = mR;
+						}
+					}
+					if(trialNr != 0 || !training){ //In this case modelRecommendations is only used in the first training phase
+						for(int i = 0; i < modelRecommendations.length; i++){
+							modelRecommendations[i] = -1;
+						}
+					}
+				}
+				//Call the main method of the architecture
+				models.doTimeStep(x, y, newSensation, training, modelRecommendations, modelType);
+				// 
+				lastSensation = newSensation;
+			}
+			
+			@Override
+			public void finishPrints() {
+				models.finishPrint(rs);
+				
+			}
+		};
+		return new MyAgentController[] { controller };
+	}
+	
+	/**
+	 * Determine the current sensory information 
+	 * @return Double array consisting of sensory information
+	 */
+	private double[] getSensation(){
+		double[] sensation = new double[ySize];
+		sensation[0] = this.handjoint.getX();
+		sensation[1] = this.handjoint.getY();				
+		sensation[2] = this.object.getX();
+		sensation[3] = this.object.getY();
+		sensation[4] = this.object.getX() - handjoint.getX();
+		sensation[5] = this.object.getY() - handjoint.getY();
+		if(object.isMerged()){
+			//if the object is attached to the hand it does not move in the hand-centered frame
+			sensation[4] = distanceHandBurrX;
+			sensation[5] = distanceHandBurrY;
+		}
+		sensation[6] = euclidianDistance(object.getX(), object.getY(), mouthCenterX, mouthCenterY);
+		sensation[7] = (double) this.object.getType();
+		return sensation;
+	}
+	
+	/*
+	 * -------------------------------
+	 * Methods for object interaction
+	 * -------------------------------
+	 */
+	
+	/**
+	 * Getter for the disk complex containing all disks of the arm
+	 * @return diskComplex of the arm
+	 */
+	public DiskComplex getDiskComplex(){
+		return this.body.getDiskComplex();
+	}
+	
+	/**
+	 * Slow the arm movement down for a given time interval
+	 */
+	public void slowDown(){
+		slowDown = 25;
+	}
+	
+	/**
+	 * If the hand touches an object, this method is called to
+	 * update the values of the haptic sensors, based on the
+	 * arms speed when touching the object
+	 * @param haptX, speed of the arm upon contact x-wise
+	 * @param haptY, speed of the arm upon contact y-wise
+	 */
+	public void setHapticFeedback(double haptX, double haptY){
+		this.hapticX = haptX;
+		this.hapticY = haptY;
+	}
+	
+	public void increaseMaxNrOfModels(){
+		if(true || !training || trialNr != 0){
+			return;
+		}
+		if(object.getType() == FLY){
+			objectsInteractedWith[2]++;
+			if(objectsInteractedWith[2] == 1){
+				//This is the first fly touched => increase number of possible models
+				models.increaseMaxNrOfModels(2);
+				models.increaseMaxNrOfModels(3);
+				models.increaseMaxNrOfModels(4);
+				models.increaseMaxNrOfModels(5);
+			}
+		}
+		else if(object.getType() == HEAVYBURRDOCK){
+			objectsInteractedWith[1]++;
+			if(objectsInteractedWith[1] == 1){
+				//This is the first heavy burrdock touched => increase number of possible models
+				models.increaseMaxNrOfModels(0);
+				models.increaseMaxNrOfModels(1);
+				models.increaseMaxNrOfModels(2);
+				models.increaseMaxNrOfModels(3);
+				models.increaseMaxNrOfModels(4);
+				models.increaseMaxNrOfModels(5);
+			}
+		}
+		else if (object.getType() == BURRDOCK){
+			objectsInteractedWith[0]++;
+			if(objectsInteractedWith[0] == 1){
+				//This is the first burrdock touched => increase number of possible models
+				models.increaseMaxNrOfModels(2);
+				models.increaseMaxNrOfModels(3);
+			}
+		}
+	}
+	
+	/**
+	 * Setter for the distance of hand to burrdock upon contact
+	 */
+	public void setHandBurrDistance(){
+		this.distanceHandBurrX = this.object.getX() - handjoint.getX();
+		this.distanceHandBurrY = this.object.getY() - handjoint.getY();
+	}
+	
+	/*
+	 * -----------------
+	 * Other methods
+	 * ------------------
+	 */
+	
+	private double euclidianDistance(double x1, double y1, double x2, double y2){
+		return Math.sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
+	}
+	
+	@Override
+	public boolean adaptVisualisationSettings(VisualizationSettings settings) {
+		settings.getOptions().getOption(VisualizationOptions.GROUP_GENERAL, VisualizationOptions.OPTION_GRID).setEnabled(false);
+		return true;
+	}
+	
+	/**
+	 * Set the color of the environment's floor
+	 * @param env, Environment used
+	 * @param backgroundType, default type of the floor
+	 * @param mouthType, type of the mouth area
+	 */
+	public void setFloor(Environment env, FloorCellType backgroundType, FloorCellType mouthType) {
+		for (int i = 0; i < env.getFloor().getNumX(); i++){
+			for (int j = 0; j < env.getFloor().getNumY(); j++){
+				if(euclidianDistance(i, j, mouthCenterX, mouthCenterY) <= mouthRadius){
+					env.getFloor().setType(i, j, mouthType);
+				}
+				else{
+					env.getFloor().setType(i, j, backgroundType);
+				}
+			}
+		}
+	}
+		
+	@Override
+	public boolean finished(){
+		//The simulation is finished of the maximal number of training sets is reached
+		return simulationOver;
+	}
+	
+	@Override
+	public String getTitle() {
+		if(training){
+			return "Training Phase #" + trialNr;
+		}
+		return "Testing Phase #" + trialNr +", "+ testingPosNr;
+	}
+	
+	@Override
+	public long getMiliSecondsPerTimeStep() {
+		return miliseconds;
+	}
+
+	@Override
+	public ModelFitter backUpArchitecture() {
+		return models;
+	}
+	
+	@Override
+	public Environment getEnvironment(){
+		if(time == 0){
+			return initialize();
+		}
+		return env;
+		
+	}
+}

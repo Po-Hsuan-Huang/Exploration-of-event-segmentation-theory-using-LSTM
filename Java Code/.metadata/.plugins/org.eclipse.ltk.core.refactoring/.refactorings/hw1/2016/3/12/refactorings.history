@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename compilation unit &apos;ArrayList.java&apos; to &apos;ArrayList1.java&apos;&#x0A;- Original project: &apos;hw1&apos;&#x0A;- Original element: &apos;ArrayList.java&apos;&#x0A;- Renamed element: &apos;ArrayList1.java&apos;" description="Rename compilation unit &apos;ArrayList.java&apos;" flags="2" id="org.eclipse.jdt.ui.rename.compilationunit" input="/src&lt;{ArrayList.java" name="ArrayList1.java" references="false" stamp="1458221017601" version="1.0"/>
+</session>

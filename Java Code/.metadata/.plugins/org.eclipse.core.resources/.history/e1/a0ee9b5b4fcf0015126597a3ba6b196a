@@ -1,0 +1,26 @@
+class Robot{
+	// method that that parameters
+	public void speak( String text) {
+		System.out.println("text");
+	}
+	public void jump(int height) {
+		System.out.println("jumping "+ height);;
+	}
+	private void move( String direction, double distance) {
+		System.out.println("Moving "+ distance +"metres in direction "+ direction);
+		
+	}
+}
+public class Method_parameters {
+
+	public static void main(String[] args) {
+		Robot sam = new Robot();
+		
+		sam.speak("Hi,I'm sam");
+		sam.jump(7);
+		sam.move("West",12.2);
+		
+		
+	}
+
+}

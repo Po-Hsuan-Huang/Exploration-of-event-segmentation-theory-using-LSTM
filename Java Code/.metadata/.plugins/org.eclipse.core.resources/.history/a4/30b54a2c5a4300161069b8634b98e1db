@@ -1,0 +1,355 @@
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Random;
+
+import de.jannlab.data.Sample;
+import de.jannlab.data.SampleSet;
+import de.jannlab.math.Matrix;
+
+
+/**
+ *  This Main Class runs the 1-D simulation of a point ball bouncing between [-1, 1] with
+ *  constant velocity. The Brain that made of LSTM model tries to predict the location
+ *  of the ball in the next time step.
+ *  
+ * */
+
+public class main2 {
+
+
+	/** parameters of the physical model */
+
+	public static double physicsModel(Ball ball,double input) {
+		// left boundary of world
+		final double WorldLeftBound = -1.0;
+		// right boundary of world
+		final double WorldRightBound = 1.0;
+
+		if (ball.isStart()) {
+			if ((double)Math.round(input*10)/10 <= WorldLeftBound  && ball.getVelocity() < 0) {
+				ball.bounce();
+			}
+			if ((double)Math.round(input*10)/10 >= WorldRightBound  && ball.getVelocity() > 0) {
+				ball.bounce();
+			}
+			ball.fly();
+		}
+		return ball.getLoc();
+	}
+
+
+
+
+	/** Parameters for main method */
+	// Physics params
+			static int timespan = 1000;			
+		// training sequence length.
+			static int window = 100;
+		//Write file
+			static ArrayList<Double> INPUT = new ArrayList<Double>();
+			static ArrayList<Double> PRED = new ArrayList<Double>();
+			static ArrayList<Double> TARGET = new ArrayList<Double>();
+			static ArrayList<Double> ERR = new ArrayList<Double>();
+			static ArrayList<Double> ERRVAR = new ArrayList<Double>();
+			static ArrayList<Double> GATEHIST = new ArrayList<Double>();
+			static ArrayList<Double> WEI = new ArrayList<Double>();
+
+			
+			static Ball ball;
+			static Sample sample;
+			static Random rnd = new Random(3);
+	public static void main(String[] args) {
+	
+
+		// Initialization
+
+		double velocity = 0.2;
+		double location = 0.0;
+		double currentlocation = location;
+		double nextlocation  = location + velocity;
+		double[] data = {currentlocation};
+		double[] target = {velocity};
+		double[] predict ;
+		double sddv = 0.5*velocity; 
+		//Initiation of models
+		ball  = new Ball(location,velocity);
+		SampleSequencer_before sequencer = new SampleSequencer_before(window,1);
+		HLSTM Brain = new HLSTM(1,3,1); // JannLab doesn't support online learning.
+		
+
+		InjectFinalWeights(Brain,1);
+
+  
+ 
+		/**
+		 * Write the weight vector to file.
+		 */
+		for (int i=0 ; i<Brain.getWeights().length ; i++){
+			WEI.add(Brain.getWeights()[i]);
+		}
+		System.out.println(WEI.size());
+		WriteFiles.Write(WEI,"weights");
+		
+		Brain.mu= 0.01;
+		Brain.alpha = 0;
+		HLSTM.window = window;
+		// Training phase
+		// Brain.init();
+		ball.start();
+		double tStart = System.nanoTime();
+		for (int t = 0; t < timespan; t++) {
+			if(t<window){
+			//System.out.println("\n" + t);
+
+			//phyiscs
+			currentlocation = ball.getLoc();
+			
+			data[0] = currentlocation ;//+ sddv*(2*rnd.nextGaussian()-1);
+
+//			nextlocation= physicsModel( ball, currentlocation);
+			nextlocation= physicsModel( ball, data[0]);
+
+			target[0] = ball.getVelocity();
+//					 	 System.out.println("data length : "+ Arrays.toString(data));
+//					 	 System.out.println("target length : "+ Arrays.toString(target));
+			sample =sequencer.getSample(data,target);
+			predict = Brain.predict(sample.input.data.clone());
+			
+			ERR.add(Brain.getMeanError());
+			ERRVAR.add(Brain.getErrorVariance());
+			
+			//WRTITE FILE
+			INPUT.add(data[0]);
+
+			PRED.add(predict[0]);
+
+			TARGET.add(target[0]);
+			
+			System.out.println("[" + (double)Math.round(sample.input.data[window-1]*100)/100 + "] => [" + (double)Math.round(100*sample.target.data[window-1])/100 + "]");
+
+			}
+			// train phase
+			if( t >= window){
+				if(t== window){
+					
+//					Brain.getTestSample(sample);
+					Brain.update(sample);
+				}
+				
+				// Make Prediction
+				currentlocation = ball.getLoc();
+				data[0] = currentlocation ;//+ sddv*(2*rnd.nextGaussian()-1);
+			
+				sample = sequencer.addSampleInput(data);
+				 
+				predict = Brain.predict(sample.input.data.clone());
+				//System.out.println("predction : " + predict[0]);
+				
+//				nextlocation = physicsModel(ball,currentlocation);
+				nextlocation= physicsModel( ball, data[0]);
+
+				target[0] = ball.getVelocity();
+				sample = sequencer.addSampleTarget(target);
+				Brain.update(sample);
+				
+				// UPDATE ERROR
+				Brain.updateError(predict[0]-target[0]);
+				ERR.add(Brain.getMeanError());
+				ERRVAR.add(Brain.getErrorVariance());
+				//WRTITE FILE
+				INPUT.add(data[0]);
+
+				PRED.add(predict[0]);
+
+				TARGET.add(target[0]);
+				
+
+				 System.out.println(" d: " + (double)Math.round(sample.input.data[window-1]*100)/100 + " p: " +
+				 (double)Math.round(100*predict[0])/100+ " t: "+ (double)Math.round(sample.target.data[window-1]*100)/100+ " e: " + (Brain.getMeanError()));
+			}
+		}
+		System.out.println("dataSize : " + INPUT.size());
+		/**
+		 *  Store the derivative of the inverseForwardModel
+		 */
+//		double[] dest = {1}; // destination of the inverse model;
+//		Brain.inverseeFrowardModelOtte(dest, sample);
+//		Matrix GateInputHistory = Brain.getNetInputGrad();
+//		System.out.println("GateInput: " +GateInputHistory );
+//		for(double i: GateInputHistory.data){ GATEHIST.add(i);}
+//		WriteFiles.Write(GATEHIST,"gatehist");
+		/**
+		 *  Stores the state of the cells in LSTM of each time step
+		 */
+		Matrix states = Brain.states;
+		for(double i: states.data){ GATEHIST.add(i);}
+		WriteFiles.Write(GATEHIST,"gatehist");	
+
+		//WRTITE FILE
+		WriteFiles.Write(INPUT, "input");
+		WriteFiles.Write(PRED, "pred");
+		WriteFiles.Write(TARGET, "target");
+		WriteFiles.Write(ERR, "err");
+		WriteFiles.Write(ERRVAR, "errvar");
+
+
+
+		ball.stop();
+		double tEnd = System.nanoTime();		// Start Simulation
+		System.out.println("TimeLapse : " + (tStart-tEnd));
+		// test phase
+
+		double[] netIn = new double[window];
+		double[] netOut = new double[1];
+		 
+		 
+		for(int t =0; t<100; t++){
+			
+			for(int i =0;i<sample.input.rows; i++){
+			 	netIn[i] = sample.input.get(i, 0);
+			 	}
+			netOut = Brain.predict(netIn);
+		    System.out.println("[" + (double)Math.round(netIn[window-1]*100)/100 + "] => [" + (double)Math.round(1000*netOut[0])/1000 + "]");
+		    data[0] = netIn[window-1] + netOut[0];
+		    sample=sequencer.addSampleInput(data);
+		    
+		    
+
+		}
+		Brain.clear();
+	}
+
+
+
+
+	
+
+	/**
+	 *  To be effective, activate after HLSM is initialized
+	 * @param net
+	 * @param idx
+	 */
+	public static void InjectFinalWeights(HLSTM net, int idx){
+			
+	
+			if (idx ==1){
+				double[] weight = { 
+					0.57,
+					-2.10,
+					-1.21,
+					0.69,
+					0.10,
+					-0.87,
+					-2.15,
+					6.98,
+					-0.06,
+					1.06,
+					0.24,
+					0.85,
+					0.1
+					};
+				
+				net.setWeights(weight);
+			}
+			else if (idx ==2){
+			
+				double[] weight = {
+						-0.56,
+						-2.07,
+						-1.23,
+						-0.70,
+						0.11,
+						-0.89,
+						2.15,
+						6.98,
+						0.06,
+						1.05,
+						0.22,
+						-0.85,
+						0.1
+						};
+				
+				net.setWeights(weight);
+			}
+			else if (idx ==3){
+				double[] weight ={
+						-0.56,
+						2.06,
+						1.22,
+						-0.68,
+						-0.10,
+						0.76,
+						-2.16,
+						6.98,
+						0.06,
+						-1.05,
+						-0.18,
+						0.85,
+						0.1
+						};
+				
+				net.setWeights(weight);
+			}
+	
+		}
+	
+		public static void injectInitialWeights(HLSTM net, int idx){
+
+			// Best Initial weights 
+			double[] weight = {0,0.5,0.1,0.1*(2*rnd.nextDouble()-1), 0.08, 0.09,0.1*(2*rnd.nextDouble()-1),
+			0.1*(2*rnd.nextDouble()-1),0.1*(2*rnd.nextDouble()-1),-0.09,-0.5,0.1*(2*rnd.nextDouble()-1),
+			0.1*(2*rnd.nextDouble()-1)};
+			
+			net.setWeights(weight);
+
+		}
+		/**
+		 * Generates random number to initialize weights of the network.
+		 * 
+		 * To avoid regularity resulting from proximal seed values, we collect random number after
+		 * 
+		 * 100 iteration of the recurrent relation.
+		 *
+		 * 
+		 * @param net  the net that is going to be assigned weights.
+		 * @param seed the seed of the random weights
+		 * @param range a positive number assigning the range [-range, range]
+		 */
+		public static void InjectRandomWeights(HLSTM net, int seed, double range){
+			
+			int Size = 13; // size of the array that stores weights. This number equals to weight_num;
+			
+			double[] weight = new double[Size];
+			
+			Random rnd  = new Random(seed);
+			
+			double rand = rnd.nextLong();   
+			
+					
+			for(int i = 0; i < 100; i++){
+			
+				rand = rnd.nextLong();   
+				
+				System.out.println("long value : " + rand);
+			}
+			
+			
+			for(int i = 0 ; i < Size; i ++){
+					
+				weight[i] =  rnd.nextLong()/1E19   * range;
+				
+				System.out.println( "weight" +i + " : " +  weight[i]);
+			}
+			
+			net.setWeights(weight);
+
+		}
+
+		
+		
+		
+
+}
+
+
+

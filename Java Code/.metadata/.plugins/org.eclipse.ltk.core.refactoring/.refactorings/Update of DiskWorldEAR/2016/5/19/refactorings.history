@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename field &apos;EarlyStopCounter&apos; in &apos;EventSegmentationArchitecture.HLSTM&apos; to &apos;earlyStopCounter&apos;&#x0A;- Original project: &apos;Update of DiskWorldEAR&apos;&#x0A;- Original element: &apos;EventSegmentationArchitecture.HLSTM.EarlyStopCounter&apos;&#x0A;- Renamed element: &apos;EventSegmentationArchitecture.HLSTM.earlyStopCounter&apos;&#x0A;- Update references to refactored element&#x0A;- Update textual occurrences in comments and strings" delegate="false" deprecate="false" description="Rename field &apos;EarlyStopCounter&apos;" flags="589826" getter="false" id="org.eclipse.jdt.ui.rename.field" input="/src&lt;EventSegmentationArchitecture{HLSTM.java[HLSTM^EarlyStopCounter" name="earlyStopCounter" references="true" setter="false" stamp="1462382208368" textual="false" version="1.0"/>
+</session>

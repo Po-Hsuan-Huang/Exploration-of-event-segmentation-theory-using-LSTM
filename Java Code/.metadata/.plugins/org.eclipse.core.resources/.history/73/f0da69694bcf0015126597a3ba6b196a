@@ -1,0 +1,24 @@
+class Person{
+	String name;
+	int age;
+	
+	void speak(){
+		System.out.println("My name is "+ name);
+	}
+	void calculateYearsToRetirement(){
+		int yearsLeft = 65- age;
+		System.out.println(""yearsLeft);
+	}
+}
+
+public class Methods {
+
+	public static void main(String[] args) {
+		Person person1 =  new Person(); // create a new objects, ends the object wtih ().
+		person1.name = "Joe Adams";
+		person1.age = 35;
+		person1.speak();
+		person1.calculateYearsToRetirement();
+	}
+
+}

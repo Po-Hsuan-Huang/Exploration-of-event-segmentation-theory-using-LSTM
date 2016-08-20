@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Copy element &apos;BadHack.java&apos; to &apos;GateDetect1D/src&apos;&#x0A;- Original project: &apos;JenLab&apos;&#x0A;- Destination element: &apos;GateDetect1D/src&apos;&#x0A;- Original element: &apos;BadHack.java&apos;" description="Copy compilation unit" destination="=GateDetect1D/src" element1="/src&lt;{BadHack.java" files="0" flags="589830" folders="0" id="org.eclipse.jdt.ui.copy" policy="org.eclipse.jdt.ui.copyResources" stamp="1464789906432" units="1" version="1.0"/>
+</session>
